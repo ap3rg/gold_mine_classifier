@@ -27,7 +27,8 @@ model = pickle.load(open(os.path.join(conf.model_path, const.model_name), 'rb'))
 gdf_grid = gpd.read_file(conf.grid_path).reset_index()
 total_num_images = gdf_grid.geometry.shape[0]
 
-print(f'Processing data between {const.start_date} and {const.end_date}. Name: {const.name}')
+print(f'Processing data between {const.start_date} and {const.end_date}. Area name: {const.area_name}')
+print(f'Using {const.satellite}.')
 with open(conf.results_path, 'w') as results:
 
     results.write(f"idx\ttotal_pixels\tmine_pixels\tcloud_cover\tgeometry\n")
@@ -39,16 +40,23 @@ with open(conf.results_path, 'w') as results:
 
             idx = const.start_idx + idxx
 
-            # Load polygon to GEE to get satelite images
+            # Load polygon to GEE to get satellite images
             polygon = ee.Geometry(aoi.__geo_interface__)
 
             # Get colelction
-            collection = ee.ImageCollection(const.landsat_8_T1) \
+            collection = ee.ImageCollection(const.satellite) \
                 .filterDate(const.start_date, const.end_date) \
                 .filterBounds(polygon) \
                 .sort("CLOUD_COVER")
+            
+            customComposite = ee.Algorithms.Landsat.simpleComposite(**{
+              "collection": collection,
+              "percentile": 75,
+              "cloudScoreRange": 5
+            })
 
-            image = collection.first()
+            # image = collection.first()
+            image = customComposite
             
             # Write cloud cover stats
             cloud_cover_list = list(collection.aggregate_array("CLOUD_COVER").getInfo())
@@ -84,30 +92,42 @@ with open(conf.results_path, 'w') as results:
             tmp_img = image.clip(polygon)
 
             # Ready data for SVM
-            band_arr_b1 = data.get('B1')
-            band_arr_b2 = data.get('B2')
-            band_arr_b3 = data.get('B3')
-            band_arr_b4 = data.get('B4')
-            band_arr_b5 = data.get('B5')
-            band_arr_b6 = data.get('B6')
-            band_arr_b7 = data.get('B7')
-            band_arr_b10 = data.get('B10')
-            band_arr_b11 = data.get('B11')
+            np_arr = []
+            
+            for idx, band in enumerate(const.classification_bands):
+                band_arr_i = data.get(band)
+                if idx == 0:
+                    original_size = np.array(band_arr_i.getInfo()).shape
+                    
+                np_arr_i = np.array(band_arr_i.getInfo()).reshape(-1)
+                np_arr.append(np_arr_i)
+                
+            
+#             band_arr_b1 = data.get('B1')
+#             band_arr_b2 = data.get('B2')
+#             band_arr_b3 = data.get('B3')
+#             band_arr_b4 = data.get('B4')
+#             band_arr_b5 = data.get('B5')
+#             band_arr_b6 = data.get('B6')
+#             band_arr_b7 = data.get('B7')
+#             band_arr_b10 = data.get('B10')
+#             band_arr_b11 = data.get('B11')
 
-            # Transfer the arrays from server to client and cast as np array.
-            original_size = np.array(band_arr_b1.getInfo()).shape
+#             # Transfer the arrays from server to client and cast as np array.
+#             original_size = np.array(band_arr_b1.getInfo()).shape
 
-            np_arr_b1 = np.array(band_arr_b1.getInfo()).reshape(-1)
-            np_arr_b2 = np.array(band_arr_b2.getInfo()).reshape(-1)
-            np_arr_b3 = np.array(band_arr_b3.getInfo()).reshape(-1)
-            np_arr_b4 = np.array(band_arr_b4.getInfo()).reshape(-1)
-            np_arr_b5 = np.array(band_arr_b5.getInfo()).reshape(-1)
-            np_arr_b6 = np.array(band_arr_b6.getInfo()).reshape(-1)
-            np_arr_b7 = np.array(band_arr_b7.getInfo()).reshape(-1)
-            np_arr_b10 = np.array(band_arr_b10.getInfo()).reshape(-1)
-            np_arr_b11 = np.array(band_arr_b11.getInfo()).reshape(-1)
+#             np_arr_b1 = np.array(band_arr_b1.getInfo()).reshape(-1)
+#             np_arr_b2 = np.array(band_arr_b2.getInfo()).reshape(-1)
+#             np_arr_b3 = np.array(band_arr_b3.getInfo()).reshape(-1)
+#             np_arr_b4 = np.array(band_arr_b4.getInfo()).reshape(-1)
+#             np_arr_b5 = np.array(band_arr_b5.getInfo()).reshape(-1)
+#             np_arr_b6 = np.array(band_arr_b6.getInfo()).reshape(-1)
+#             np_arr_b7 = np.array(band_arr_b7.getInfo()).reshape(-1)
+#             np_arr_b10 = np.array(band_arr_b10.getInfo()).reshape(-1)
+#             np_arr_b11 = np.array(band_arr_b11.getInfo()).reshape(-1)
 
-            data = np.stack((np_arr_b1, np_arr_b2, np_arr_b3, np_arr_b4, np_arr_b5, np_arr_b6, np_arr_b7, np_arr_b10, np_arr_b11), axis=1)
+#             data = np.stack((np_arr_b1, np_arr_b2, np_arr_b3, np_arr_b4, np_arr_b5, np_arr_b6, np_arr_b7, np_arr_b10, np_arr_b11), axis=1)
+            data = np.stack(np_arr, axis=1)
             
             y_classified = model.predict(data)
             results.write(f"{idx}\t{y_classified.shape[0]}\t{y_classified.sum()}\t{cloud_cover}\t{wkt.dumps(aoi)}\n")
